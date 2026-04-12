@@ -167,3 +167,66 @@ chrome.tabs.onActivated.addListener(async () => {
     }
   }
 });
+
+// Inject UA spoofing script into Netflix pages
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === 'loading' && tab.url?.includes('netflix.com')) {
+    if (!enabled) return;
+    
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        world: 'MAIN',
+        function: injectUAIntoPage,
+        args: [activeUA]
+      });
+      console.log("[Netflix 1080p UA] Injected UA into Netflix page");
+    } catch (e) {
+      console.error("[Netflix 1080p UA] Failed to inject script:", e);
+    }
+  }
+});
+
+// Function to inject into main world - passed as serializable function
+function injectUAIntoPage(ua) {
+  // Clear Netflix's cached playback capabilities
+  const keysToRemove = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && (key.includes('playback') || key.includes('capability') || key.includes('msl') || key.includes('drm'))) {
+      keysToRemove.push(key);
+    }
+  }
+  keysToRemove.forEach(key => {
+    console.log("[Netflix 1080p UA] Clearing localStorage:", key);
+    localStorage.removeItem(key);
+  });
+  
+  // Clear sessionStorage
+  for (let i = sessionStorage.length - 1; i >= 0; i--) {
+    const key = sessionStorage.key(i);
+    if (key && (key.includes('playback') || key.includes('capability'))) {
+      console.log("[Netflix 1080p UA] Clearing sessionStorage:", key);
+      sessionStorage.removeItem(key);
+    }
+  }
+  
+  // Inject UA into navigator object
+  const props = {
+    userAgent: () => ua,
+    appVersion: () => ua.replace("Mozilla/", ""),
+    platform: () => "Linux x86_64",
+    vendor: () => "Google Inc.",
+    appName: () => "Netscape"
+  };
+  
+  for (const [key, get] of Object.entries(props)) {
+    try {
+      Object.defineProperty(navigator, key, { get, configurable: true });
+    } catch (e) {
+      console.error("[Netflix 1080p UA] Failed to set navigator." + key, e);
+    }
+  }
+  
+  console.log("[Netflix 1080p UA] Injected UA:", navigator.userAgent);
+}

@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "tabs",
-    "declarativeNetRequest"
+    "declarativeNetRequest",
+    "scripting"
   ],
   "host_permissions": [
     "*://*.netflix.com/*",
@@ -38,17 +39,5 @@
         "path": "rules.json"
       }
     ]
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "*://*.netflix.com/*"
-      ],
-      "js": [
-        "content.js"
-      ],
-      "run_at": "document_start",
-      "all_frames": true
-    }
-  ]
+  }
 }
