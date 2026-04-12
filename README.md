@@ -39,5 +39,10 @@ If issues persist, try clearing your browser cache and reloading Netflix.
 - **Required Permissions**: webRequest, storage, tabs, webNavigation
 - **Host Permissions**: Netflix domains and user-agent API source
 
+## Credits
+This project is forked from [majackie/Netflix1080pUA](https://github.com/majackie/Netflix1080pUA) and has been adapted and maintained for Chrome and Chromium-based browsers.
+
+**Note:** This fork has been created and maintained with the assistance of AI (Vibe Coding). The code and implementations are AI-assisted creations.
+
 ## Contributors
-Jackie Ma
+[Jackie Ma](https://github.com/majackie)
