@@ -126,23 +126,18 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "GET_STATE") return Promise.resolve({ enabled, ua: activeUA });
 });
 
-// init
+// Init - Set Active UA early
 async function init() {
-  // First, load cached UA synchronously for immediate use
   const { enabled: saved, cachedUA } = await chrome.storage.local.get(["enabled", "cachedUA"]);
   
-  // Set activeUA to cached value immediately before any network requests happen
   if (cachedUA) {
     activeUA = cachedUA;
   }
   
   await setEnabled(saved ?? true);
-  
-  // Then refresh/verify the UA in the background
   await refreshUA();
   updateIcon(enabled);
   
-  // Ensure DNR rule is set with current UA
   if (enabled) {
     await updateDNRRule(activeUA);
   }
@@ -151,7 +146,7 @@ async function init() {
 // Ensure UA is fresh when extension starts
 init();
 
-// Refresh UA periodically, but also ensure it's available quickly
+// Refresh UA periodically
 const refreshInterval = setInterval(refreshUA, CACHE_TTL);
 
 // Also refresh UA when extension loses and regains focus (in case cache expired)
@@ -160,73 +155,6 @@ chrome.tabs.onActivated.addListener(async () => {
   const now = Date.now();
   if (!cachedUATimestamp || (now - cachedUATimestamp) > CACHE_TTL) {
     await refreshUA();
-    // Notify all Netflix tabs of the updated UA
-    const tabs = await chrome.tabs.query({ url: "*://*.netflix.com/*" });
-    for (const tab of tabs) {
-      chrome.tabs.sendMessage(tab.id, { type: "UPDATE_UA", enabled, ua: activeUA }).catch(() => {});
-    }
   }
 });
 
-// Inject UA spoofing script into Netflix pages
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'loading' && tab.url?.includes('netflix.com')) {
-    if (!enabled) return;
-    
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        function: injectUAIntoPage,
-        args: [activeUA]
-      });
-      console.log("[Netflix 1080p UA] Injected UA into Netflix page");
-    } catch (e) {
-      console.error("[Netflix 1080p UA] Failed to inject script:", e);
-    }
-  }
-});
-
-// Function to inject into main world - passed as serializable function
-function injectUAIntoPage(ua) {
-  // Clear Netflix's cached playback capabilities
-  const keysToRemove = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && (key.includes('playback') || key.includes('capability') || key.includes('msl') || key.includes('drm'))) {
-      keysToRemove.push(key);
-    }
-  }
-  keysToRemove.forEach(key => {
-    console.log("[Netflix 1080p UA] Clearing localStorage:", key);
-    localStorage.removeItem(key);
-  });
-  
-  // Clear sessionStorage
-  for (let i = sessionStorage.length - 1; i >= 0; i--) {
-    const key = sessionStorage.key(i);
-    if (key && (key.includes('playback') || key.includes('capability'))) {
-      console.log("[Netflix 1080p UA] Clearing sessionStorage:", key);
-      sessionStorage.removeItem(key);
-    }
-  }
-  
-  // Inject UA into navigator object
-  const props = {
-    userAgent: () => ua,
-    appVersion: () => ua.replace("Mozilla/", ""),
-    platform: () => "Linux x86_64",
-    vendor: () => "Google Inc.",
-    appName: () => "Netscape"
-  };
-  
-  for (const [key, get] of Object.entries(props)) {
-    try {
-      Object.defineProperty(navigator, key, { get, configurable: true });
-    } catch (e) {
-      console.error("[Netflix 1080p UA] Failed to set navigator." + key, e);
-    }
-  }
-  
-  console.log("[Netflix 1080p UA] Injected UA:", navigator.userAgent);
-}

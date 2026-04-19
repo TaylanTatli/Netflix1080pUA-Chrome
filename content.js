@@ -1,99 +1,89 @@
-(function () {
-  const FALLBACK_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 OPR/120.0.0.0";
+// Runs synchronously at document_start in the MAIN world.
+// Safely bypasses CSP and evaluates before Netflix evaluates browser capabilities.
 
-  function runInPage(code) {
+const FALLBACK_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 OPR/120.0.0.0";
+
+function injectNetflixSpoof(ua) {
+  if (window.__NETFLIX_1080P_UA_SETUP__) return;
+  Object.defineProperty(window, '__NETFLIX_1080P_UA_SETUP__', { value: true, writable: false });
+
+  // Clear Netflix's cached playback capabilities
+  function clearNetflixCaches() {
     try {
-      const script = document.createElement("script");
-      script.textContent = code;
-      (document.head || document.documentElement).prepend(script);
-      script.remove();
-      return true;
-    } catch (e) {
-      console.error("[Netflix 1080p UA] Failed to inject script:", e);
-      return false;
-    }
+      const keysToRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.includes('playback') || key.includes('capability') || key.includes('msl') || key.includes('drm'))) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => localStorage.removeItem(key));
+      
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const key = sessionStorage.key(i);
+        if (key && (key.includes('playback') || key.includes('capability'))) {
+          sessionStorage.removeItem(key);
+        }
+      }
+      
+      if (window.indexedDB && window.indexedDB.databases) {
+        window.indexedDB.databases().then(dbs => {
+          for (const db of dbs) {
+            if (db.name && (db.name.includes('netflix') || db.name.includes('nflx') || db.name.includes('playback') || db.name.includes('drm'))) {
+              window.indexedDB.deleteDatabase(db.name);
+            }
+          }
+        }).catch(() => {});
+      }
+    } catch (e) {}
   }
 
-  const injectUA = (ua) => runInPage(`(function(){
-    const props = {
-      userAgent:  () => ${JSON.stringify(ua)},
-      appVersion: () => ${JSON.stringify(ua.replace("Mozilla/", ""))},
-      platform:   () => "Linux x86_64",
-      vendor:     () => "Google Inc.",
-      appName:    () => "Netscape"
-    };
-    for (const [key, get] of Object.entries(props)) {
-      try { 
-        Object.defineProperty(navigator, key, { get, configurable: true }); 
-      } catch {}
-    }
-    console.log("[Netflix 1080p UA] Injected UA:", navigator.userAgent);
-  })()`);
+  // Intercept SPA routing natively
+  const originalPushState = history.pushState;
+  const originalReplaceState = history.replaceState;
 
-  const clearNetflixCache = () => runInPage(`(function(){
-    // Clear Netflix's cached playback capabilities from localStorage
-    const keysToRemove = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && (key.includes('playback') || key.includes('capability') || key.includes('msl') || key.includes('drm'))) {
-        keysToRemove.push(key);
-      }
-    }
-    keysToRemove.forEach(key => {
-      console.log("[Netflix 1080p UA] Clearing localStorage:", key);
-      localStorage.removeItem(key);
-    });
+  // The secret to fixing 1080p on SPA routing:
+  // Netflix stores DRM capabilities in JavaScript memory (React/Redux state).
+  // Clearing caches isn't enough unless the page is fully reloaded.
+  // So, when Netflix tries to SPA-navigate to a video, we force a real navigation!
+  history.pushState = function(state, unused, url) {
+    clearNetflixCaches();
     
-    // Also clear sessionStorage
-    for (let i = sessionStorage.length - 1; i >= 0; i--) {
-      const key = sessionStorage.key(i);
-      if (key && (key.includes('playback') || key.includes('capability'))) {
-        console.log("[Netflix 1080p UA] Clearing sessionStorage:", key);
-        sessionStorage.removeItem(key);
-      }
+    if (url && typeof url === 'string' && (url.includes('/watch') || url.includes('/title/'))) {
+      console.log("[Netflix 1080p UA] Forcing hard navigation to video for 1080p playback...");
+      window.location.href = url;
+      return;
     }
-  })()`);
-
-  const restoreUA = () => runInPage(`(function(){
-    for (const p of ["userAgent","appVersion","platform","vendor","appName"])
-      try { Object.defineProperty(navigator, p, { configurable: true, writable: true }); } catch {}
-    console.log("[Netflix 1080p UA] Restored native UA:", navigator.userAgent);
-  })()`);
-
-  // Clear any cached Netflix capabilities BEFORE injecting UA
-  console.log("[Netflix 1080p UA] Clearing cached capabilities at document_start");
-  clearNetflixCache();
+    
+    return originalPushState.apply(this, arguments);
+  };
   
-  // inject immediately with fallback so page scripts see the spoofed UA from the start
-  console.log("[Netflix 1080p UA] Injecting fallback UA at document_start");
-  injectUA(FALLBACK_UA);
+  history.replaceState = function(state, unused, url) {
+    clearNetflixCaches();
+    return originalReplaceState.apply(this, arguments);
+  };
 
-  // async: re-inject with up-to-date UA or undo if disabled
-  chrome.storage.local.get(["cachedUA", "enabled"]).then(({ cachedUA, enabled }) => {
-    console.log("[Netflix 1080p UA] Storage loaded - enabled:", enabled, "cachedUA:", cachedUA ? "present" : "missing");
-    if (enabled === false) return restoreUA();
-    const ua = cachedUA || FALLBACK_UA;
-    if (ua !== FALLBACK_UA) {
-      console.log("[Netflix 1080p UA] Updating to cached UA");
-      injectUA(ua);
-    }
-  }).catch((e) => {
-    console.error("[Netflix 1080p UA] Storage error:", e);
-  });
+  // Initial clear on first load
+  clearNetflixCaches();
 
-  // Listen for messages from background script to update UA in real-time
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "UPDATE_UA") {
-      console.log("[Netflix 1080p UA] Received UPDATE_UA message - enabled:", msg.enabled);
-      if (msg.enabled === false) {
-        restoreUA();
-      } else {
-        clearNetflixCache();
-        injectUA(msg.ua || FALLBACK_UA);
-      }
-    } else if (msg.type === "CLEAR_CACHE") {
-      console.log("[Netflix 1080p UA] Received CLEAR_CACHE message");
-      clearNetflixCache();
-    }
-  });
-})();
+  // Inject UA into navigator object
+  const props = {
+    userAgent: () => ua,
+    appVersion: () => ua.replace("Mozilla/", ""),
+    platform: () => "Linux x86_64",
+    vendor: () => "Google Inc.",
+    appName: () => "Netscape"
+  };
+  
+  for (const [key, get] of Object.entries(props)) {
+    try {
+      Object.defineProperty(navigator, key, { get, configurable: true });
+    } catch (e) {}
+  }
+  
+  console.log("[Netflix 1080p UA] Spoof initialized and SPA handled synchronously (MAIN WORLD)!");
+}
+
+injectNetflixSpoof(FALLBACK_UA);
+
+
